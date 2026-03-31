@@ -59,12 +59,24 @@ func Traceroute(conn net.Conn) ([]Hop, error) {
 
 	local := tcpConn.LocalAddr().(*net.TCPAddr)
 	remote := tcpConn.RemoteAddr().(*net.TCPAddr)
-	srcIP, dstIP := local.IP.To4(), remote.IP.To4()
+	return TracerouteAddr(local, remote)
+}
+
+// TracerouteAddr is like Traceroute but takes an explicit source and
+// destination address instead of a net.Conn. Use this when you already know
+// the 5-tuple of an established connection (e.g. from another process or from
+// netstat output) and do not hold the connection object.
+//
+// Both addresses must be IPv4; IPv6 is not supported.
+func TracerouteAddr(src, dst *net.TCPAddr) ([]Hop, error) {
+	srcIP, dstIP := src.IP.To4(), dst.IP.To4()
 	if srcIP == nil || dstIP == nil {
 		return nil, nil // IPv6 not supported
 	}
-	srcPort, dstPort := uint16(local.Port), uint16(remote.Port)
+	return traceroute(srcIP, dstIP, uint16(src.Port), uint16(dst.Port))
+}
 
+func traceroute(srcIP, dstIP net.IP, srcPort, dstPort uint16) ([]Hop, error) {
 	// Raw socket for sending — IP_HDRINCL lets us set the full IP header,
 	// including TTL and IP ID, without kernel interference.
 	sendFd, err := syscall.Socket(syscall.AF_INET, syscall.SOCK_RAW, syscall.IPPROTO_RAW)
@@ -190,6 +202,16 @@ func Traceroute(conn net.Conn) ([]Hop, error) {
 // the remote host. Returns (0, nil) when no hops respond.
 func MeasureRTT(conn net.Conn) (rttMs uint32, err error) {
 	hops, err := Traceroute(conn)
+	if err != nil || len(hops) == 0 {
+		return 0, err
+	}
+	last := hops[len(hops)-1]
+	return uint32(last.RTT.Milliseconds()), nil
+}
+
+// MeasureRTTAddr is like MeasureRTT but takes an explicit 5-tuple.
+func MeasureRTTAddr(src, dst *net.TCPAddr) (rttMs uint32, err error) {
+	hops, err := TracerouteAddr(src, dst)
 	if err != nil || len(hops) == 0 {
 		return 0, err
 	}
